@@ -529,6 +529,19 @@ fn empty_recycle_dry_run_reports_without_emptying() {
 }
 
 #[test]
+fn recycle_is_the_same_command_as_empty_recycle() {
+    // `ofm recycle` is what people reach for when they mean "empty the bin",
+    // so it has to land on empty-recycle and not on `trash`.
+    let output = ofm(&["recycle", "--dry-run", "--json"]);
+    assert!(output.status.success(), "{}", stdout_of(&output));
+    let text = stdout_of(&output);
+    assert!(
+        text.contains("\"command\": \"empty-recycle\""),
+        "expected the empty-recycle summary, got: {text}"
+    );
+}
+
+#[test]
 fn trash_dry_run_lists_targets() {
     let dir = tempfile::tempdir().unwrap();
     let victim = dir.path().join("spare.txt");

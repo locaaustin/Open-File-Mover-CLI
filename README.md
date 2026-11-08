@@ -62,13 +62,13 @@ runtime dependencies — no Python, no DLLs to ship.
 | `ofm move <SRC>... <DEST>` | Move files and folders |
 | `ofm copy <SRC>... <DEST>` | Same engine, originals left alone |
 | `ofm trash <PATH>...` | Send to the Recycle Bin (undoable) |
-| `ofm empty-recycle` | Permanently empty the Recycle Bin |
+| `ofm recycle` | Permanently empty the Recycle Bin |
 | `ofm clean-downloads` | Clear out the Downloads folder |
 | `ofm doctor` | Environment, log location, Recycle Bin state |
 | `ofm completions <SHELL>` | Generate a completion script |
 
-Short aliases from v1 still work: `mv`, `cp`, `er`, `ed`, `move-folder`,
-`empty-downloads`.
+Short aliases from v1 still work: `mv`, `cp`, `rm`, `er`, `ed`, `move-folder`,
+`empty-recycle`, `empty-downloads`.
 
 ### Moving and copying
 
@@ -134,6 +134,29 @@ Names are deduplicated across the whole run, so flattening two folders that
 both contain `notes.txt` gives you `notes.txt` and `notes (1).txt` rather than
 one file silently eating the other.
 
+### The Recycle Bin
+
+Two commands, pointing opposite ways. `trash` puts things *into* the bin, where
+Explorer can still restore them:
+
+```bash
+ofm trash C:\old-project                   # undoable
+ofm trash D:\dumpig.iso --dry-run        # look first
+```
+
+`recycle` empties it, which is not undoable:
+
+```bash
+ofm recycle                                # the whole bin, all drives
+ofm recycle --dry-run                      # just tell me what is in there
+ofm recycle --drive C:                     # one drive only
+ofm recycle --yes                          # no prompt, for scripts
+```
+
+It prints the item count and the space it is about to reclaim and asks before
+doing anything. `--dry-run` reports and stops. `empty-recycle` and `er` are
+aliases of the same command.
+
 ### Clearing out Downloads
 
 ```bash
@@ -155,7 +178,7 @@ Moving a lot of files is exactly when you least want a surprise.
 - **`--dry-run` on everything.** The planner builds the full list of operations
   without touching anything, and the dry run prints that same list. It is a
   preview, not an estimate.
-- **Nothing destructive happens silently.** `trash`, `empty-recycle` and
+- **Nothing destructive happens silently.** `trash`, `recycle` and
   `clean-downloads --permanent` ask first. With no terminal to ask (a script, a
   pipe) they refuse rather than guess; pass `--yes` when you mean it.
 - **Deletion defaults to recoverable.** The Recycle Bin is the default; you

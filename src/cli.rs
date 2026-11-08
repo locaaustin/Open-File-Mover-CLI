@@ -25,7 +25,7 @@ pub const BANNER_VERSION: &str = env!("CARGO_PKG_VERSION");
         ofm move C:/build/out --to //nas/releases --contents --on-conflict rename\n  \
         ofm copy C:/project --to D:/backup --exclude '**/node_modules/**' --verify\n  \
         ofm clean-downloads --older-than 30d --dry-run\n  \
-        ofm empty-recycle\n  \
+        ofm recycle\n  \
         ofm doctor",
     propagate_version = true,
     disable_help_subcommand = false
@@ -97,11 +97,11 @@ pub enum Command {
     Copy(TransferArgs),
 
     /// Send files or folders to the Recycle Bin (undoable).
-    #[command(visible_aliases = ["rm", "recycle"])]
+    #[command(visible_alias = "rm")]
     Trash(TrashArgs),
 
     /// Permanently empty the Recycle Bin.
-    #[command(visible_alias = "er")]
+    #[command(visible_aliases = ["recycle", "er"])]
     EmptyRecycle(EmptyRecycleArgs),
 
     /// Clear out the Downloads folder.
@@ -389,10 +389,17 @@ mod tests {
             let cli = Cli::try_parse_from(["ofm", alias, "a", "b"]).unwrap();
             assert!(matches!(cli.command, Some(Command::Move(_))));
         }
-        assert!(matches!(
-            Cli::try_parse_from(["ofm", "er"]).unwrap().command,
-            Some(Command::EmptyRecycle(_))
-        ));
+        for alias in ["recycle", "er"] {
+            let cli = Cli::try_parse_from(["ofm", alias]).unwrap();
+            assert!(
+                matches!(cli.command, Some(Command::EmptyRecycle(_))),
+                "`{alias}` should empty the Recycle Bin"
+            );
+        }
+        // `trash` needs paths, so a bare `rm` is a usage error rather than a
+        // successful parse; what matters is that it is still the trash command.
+        let cli = Cli::try_parse_from(["ofm", "rm", "a"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Trash(_))));
         assert!(matches!(
             Cli::try_parse_from(["ofm", "ed"]).unwrap().command,
             Some(Command::CleanDownloads(_))
