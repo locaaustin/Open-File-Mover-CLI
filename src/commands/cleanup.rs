@@ -109,23 +109,50 @@ pub fn empty_recycle(args: &EmptyRecycleArgs, ui: &Ui, logger: &Logger) -> Resul
     }
 
     if !ui.confirm("Permanently delete everything in the Recycle Bin? This cannot be undone.")? {
-        ui.say("Left alone.");
+        // Answering no is easy to do by accident - the default is no, so a
+        // bare Enter lands here - and a full bin afterwards looks like the
+        // command failing rather than obeying.
+        ui.say("Nothing was emptied; the Recycle Bin is untouched.");
+        ui.say(ui.dim("Re-run with --yes to skip this question."));
         return Ok(summary);
     }
 
     platform::empty_recycle_bin(args.drive.as_deref())?;
-    summary.files = contents.items;
-    summary.bytes = contents.bytes;
-    summary.bytes_human = util::format_bytes(contents.bytes);
+
+    // Ask the shell what is left rather than assuming everything went. Items
+    // can survive an empty: another account's files, a drive that is not
+    // mounted, or a file some process still holds open.
+    let left = platform::recycle_bin_contents(args.drive.as_deref()).unwrap_or_default();
+    let gone_items = contents.items.saturating_sub(left.items);
+    let gone_bytes = contents.bytes.saturating_sub(left.bytes);
+
+    summary.files = gone_items;
+    summary.bytes = gone_bytes;
+    summary.bytes_human = util::format_bytes(gone_bytes);
     logger.write(format!(
-        "emptied the Recycle Bin{scope}: {} items, {}",
-        contents.items,
-        util::format_bytes(contents.bytes)
+        "emptied the Recycle Bin{scope}: {} items, {}{}",
+        gone_items,
+        util::format_bytes(gone_bytes),
+        if left.items > 0 {
+            format!(" ({} items left behind)", left.items)
+        } else {
+            String::new()
+        }
     ));
-    ui.say(ui.green(&format!(
-        "Emptied the Recycle Bin{scope} and reclaimed {}.",
-        util::format_bytes(contents.bytes)
-    )));
+
+    if gone_items > 0 {
+        ui.say(ui.green(&format!(
+            "Emptied the Recycle Bin{scope} and reclaimed {}.",
+            util::format_bytes(gone_bytes)
+        )));
+    }
+    if left.items > 0 {
+        ui.warn(format!(
+            "{} still in the Recycle Bin{scope} ({}). The shell would not delete them:              they may belong to another user account, sit on a drive that is not mounted,              or be held open by a running program.",
+            count(left.items as usize, "item", "items"),
+            util::format_bytes(left.bytes)
+        ));
+    }
     Ok(summary)
 }
 

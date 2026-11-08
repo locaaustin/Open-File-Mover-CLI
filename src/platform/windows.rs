@@ -13,13 +13,21 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows_sys::Win32::UI::Shell::{
-    SHEmptyRecycleBinW, SHFileOperationW, SHGetKnownFolderPath, SHQueryRecycleBinW, FOF_ALLOWUNDO,
-    FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, FO_DELETE,
-    SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHFILEOPSTRUCTW, SHQUERYRBINFO,
+    FOLDERID_RecycleBinFolder, ILFree, SHChangeNotify, SHEmptyRecycleBinW, SHFileOperationW,
+    SHGetKnownFolderIDList, SHGetKnownFolderPath, SHQueryRecycleBinW, FOF_ALLOWUNDO,
+    FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, FO_DELETE, SHCNE_UPDATEDIR,
+    SHCNF_IDLIST, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHFILEOPSTRUCTW,
+    SHQUERYRBINFO,
 };
 
 use super::BinContents;
+
+/// `SHCNF_FLUSH`. windows-sys does not export it, and without it the shell
+/// takes the notification asynchronously - which a process that exits
+/// immediately afterwards cannot rely on.
+const SHCNF_FLUSH: u32 = 0x1000;
 
 /// FOLDERID_Downloads: {374DE290-123F-4565-9164-39C4925E467B}
 const FOLDERID_DOWNLOADS: GUID = GUID {
@@ -129,7 +137,37 @@ pub fn empty_recycle_bin(drive: Option<&str>) -> Result<()> {
             bail!("the shell refused to empty the Recycle Bin (HRESULT {result:#x})");
         }
     }
+    refresh_recycle_bin_view();
     Ok(())
+}
+
+/// Tell the shell that the Recycle Bin changed.
+///
+/// `SHEmptyRecycleBinW` called with no owner window and no progress UI leaves
+/// an already-open Recycle Bin window - and the desktop icon - still showing
+/// items that are no longer on disk. From the user's side a successful empty
+/// then looks like it did nothing at all, so the notification is not optional.
+pub fn refresh_recycle_bin_view() {
+    unsafe {
+        let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
+        let result = SHGetKnownFolderIDList(
+            &FOLDERID_RecycleBinFolder,
+            0,
+            std::ptr::null_mut(),
+            &mut pidl,
+        );
+        if result != S_OK || pidl.is_null() {
+            // Cosmetic only: a stale window is not worth failing the command.
+            return;
+        }
+        SHChangeNotify(
+            SHCNE_UPDATEDIR as i32,
+            SHCNF_IDLIST | SHCNF_FLUSH,
+            pidl.cast(),
+            std::ptr::null(),
+        );
+        ILFree(pidl);
+    }
 }
 
 /// Send paths to the Recycle Bin so they can be restored from Explorer.
@@ -178,6 +216,7 @@ pub fn send_to_recycle_bin(paths: &[PathBuf]) -> Result<()> {
     if operation.fAnyOperationsAborted != 0 {
         bail!("the operation was aborted before everything was recycled");
     }
+    refresh_recycle_bin_view();
     Ok(())
 }
 
@@ -252,11 +291,24 @@ mod tests {
     }
 
     #[test]
+    fn refreshing_the_bin_view_is_safe_to_call() {
+        // It talks to the shell and returns nothing; the contract is only that
+        // it never panics and never leaks the PIDL.
+        refresh_recycle_bin_view();
+        refresh_recycle_bin_view();
+    }
+
+    #[test]
     fn recycling_nothing_is_a_no_op() {
         assert!(send_to_recycle_bin(&[]).is_ok());
     }
 
+    // Ignored by default: it leaves a real entry in whoever runs it's Recycle
+    // Bin, and a stray `ofm-recycle-test` turning up after every `cargo test`
+    // is exactly the kind of thing that makes people distrust the tool. Run it
+    // deliberately with `cargo test -- --ignored`.
     #[test]
+    #[ignore = "puts a real file in the Recycle Bin"]
     fn a_real_file_round_trips_to_the_bin() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ofm-recycle-test.txt");

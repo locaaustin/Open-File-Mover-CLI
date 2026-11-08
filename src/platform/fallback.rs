@@ -28,6 +28,8 @@ pub fn send_to_recycle_bin(_paths: &[PathBuf]) -> Result<()> {
     bail!("the Recycle Bin is a Windows feature; use `ofm move` to relocate files instead")
 }
 
+pub fn refresh_recycle_bin_view() {}
+
 pub fn enable_ansi() {}
 
 pub fn describe_platform() -> String {
