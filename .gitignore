@@ -1,1 +1,14 @@
+# Rust build output
+/target
+
+# Local benchmark / scratch data
+/bench
+
+# Editor and OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# Legacy Python virtualenv
 env

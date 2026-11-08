@@ -1,0 +1,50 @@
+[package]
+name = "open-file-mover"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.79"
+authors = ["Austin C. Gomez and the Open File Mover contributors"]
+description = "Fast bulk file mover for Windows: move, copy, filter and clean up huge directory trees from the command line."
+license = "Unlicense"
+repository = "https://github.com/AustinCGomez/Open-File-Mover-CLI"
+readme = "README.md"
+keywords = ["cli", "move", "files", "windows", "filesystem"]
+categories = ["command-line-utilities", "filesystem"]
+
+[lib]
+name = "open_file_mover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ofm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+ctrlc = "3"
+globset = "0.4"
+indicatif = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
