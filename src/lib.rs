@@ -114,7 +114,7 @@ fn dispatch(
             &args, ui, logger,
         )?)),
         Command::CleanDownloads(args) => Ok(Handled::JsonOnly(commands::cleanup::clean_downloads(
-            &args, ui, logger,
+            &args, ui, logger, cancelled,
         )?)),
         Command::Doctor => Ok(Handled::SelfReported(commands::doctor::run(ui, logger)?)),
         Command::Completions(args) => {

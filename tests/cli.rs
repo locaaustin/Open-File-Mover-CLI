@@ -504,6 +504,87 @@ fn clean_downloads_can_move_entries_aside() {
 }
 
 #[test]
+fn downloads_is_the_same_command_as_clean_downloads() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("Downloads");
+    fs::create_dir_all(&downloads).unwrap();
+    fs::write(downloads.join("installer.exe"), b"binary").unwrap();
+
+    let output = ofm(&["downloads", "--dir", &s(&downloads), "--dry-run", "--json"]);
+    assert!(output.status.success(), "{}", stdout_of(&output));
+    let text = stdout_of(&output);
+    assert!(
+        text.contains("\"command\": \"clean-downloads\""),
+        "expected the clean-downloads summary, got: {text}"
+    );
+    assert!(
+        downloads.join("installer.exe").exists(),
+        "a dry run must not remove anything"
+    );
+}
+
+#[test]
+fn moving_downloads_aside_keeps_nested_folders_whole() {
+    // `--to` used to be a bare rename, which cannot cross volumes and so
+    // failed outright for the quarantine-to-another-drive case it exists for.
+    // It now goes through the transfer engine; this covers the tree handling.
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("Downloads");
+    fs::create_dir_all(downloads.join("archive/inner")).unwrap();
+    fs::write(downloads.join("archive/inner/deep.txt"), b"deep").unwrap();
+    fs::write(downloads.join("archive/top.txt"), b"top").unwrap();
+    fs::write(downloads.join("loose.bin"), b"loose").unwrap();
+    let attic = dir.path().join("attic");
+
+    let output = ofm(&[
+        "downloads",
+        "--dir",
+        &s(&downloads),
+        "--to",
+        &s(&attic),
+        "--yes",
+    ]);
+    assert!(output.status.success(), "{}", stdout_of(&output));
+    assert_eq!(
+        fs::read_to_string(attic.join("archive/inner/deep.txt")).unwrap(),
+        "deep"
+    );
+    assert!(attic.join("archive/top.txt").exists());
+    assert!(attic.join("loose.bin").exists());
+    assert!(
+        !downloads.join("archive").exists(),
+        "the source tree should be gone after a move"
+    );
+    let text = stdout_of(&output);
+    // Two top-level entries: the `archive` tree and the loose file.
+    assert!(
+        text.contains("Moved 2 entries"),
+        "expected both top-level entries to be counted, got: {text}"
+    );
+}
+
+#[test]
+fn declining_the_downloads_prompt_says_nothing_happened() {
+    let dir = tempfile::tempdir().unwrap();
+    let downloads = dir.path().join("Downloads");
+    fs::create_dir_all(&downloads).unwrap();
+    fs::write(downloads.join("installer.exe"), b"binary").unwrap();
+
+    // No terminal on stdin, so the confirmation refuses rather than guessing.
+    let output = ofm(&["downloads", "--dir", &s(&downloads)]);
+    assert!(downloads.join("installer.exe").exists());
+    let text = format!(
+        "{}{}",
+        stdout_of(&output),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        text.contains("refusing to guess"),
+        "expected a refusal, got: {text}"
+    );
+}
+
+#[test]
 fn clean_downloads_refuses_without_a_confirmation() {
     let dir = tempfile::tempdir().unwrap();
     let downloads = dir.path().join("Downloads");

@@ -24,7 +24,7 @@ pub const BANNER_VERSION: &str = env!("CARGO_PKG_VERSION");
         ofm move C:/inbox --to D:/sorted --ext jpg,png,raw --group-by date\n  \
         ofm move C:/build/out --to //nas/releases --contents --on-conflict rename\n  \
         ofm copy C:/project --to D:/backup --exclude '**/node_modules/**' --verify\n  \
-        ofm clean-downloads --older-than 30d --dry-run\n  \
+        ofm downloads --older-than 30d --dry-run\n  \
         ofm recycle\n  \
         ofm doctor",
     propagate_version = true,
@@ -105,7 +105,7 @@ pub enum Command {
     EmptyRecycle(EmptyRecycleArgs),
 
     /// Clear out the Downloads folder.
-    #[command(visible_aliases = ["ed", "empty-downloads"])]
+    #[command(visible_aliases = ["downloads", "ed", "empty-downloads"])]
     CleanDownloads(CleanDownloadsArgs),
 
     /// Show environment details and where the log lives.
@@ -116,7 +116,11 @@ pub enum Command {
 }
 
 /// Shared arguments for `move` and `copy`.
-#[derive(Debug, Args, Clone)]
+///
+/// `Default` exists so that other commands can drive the transfer engine
+/// without faking a command line. The defaults deliberately match the ones
+/// clap applies, so a hand-built `TransferArgs` behaves like `ofm move`.
+#[derive(Debug, Args, Clone, Default)]
 pub struct TransferArgs {
     /// Sources to transfer. With no --to, the last path is the destination.
     #[arg(value_name = "PATH", required = true)]
@@ -274,10 +278,11 @@ pub struct CompletionsArgs {
 }
 
 /// What to do when a destination file is already there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, serde::Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Conflict {
     /// Give the incoming file a numbered name: `report (1).txt`.
+    #[default]
     Rename,
     /// Leave the existing file alone and skip the source.
     Skip,
@@ -346,6 +351,34 @@ mod tests {
     }
 
     #[test]
+    fn default_transfer_args_match_what_clap_would_build() {
+        // Other commands build TransferArgs by hand to reuse the transfer
+        // engine; if these drift apart, those commands silently stop behaving
+        // like `ofm move`.
+        let parsed = Cli::try_parse_from(["ofm", "move", "a", "b"]).unwrap();
+        let Some(Command::Move(parsed)) = parsed.command else {
+            panic!("expected a move command");
+        };
+        let built = TransferArgs {
+            paths: parsed.paths.clone(),
+            ..Default::default()
+        };
+        assert_eq!(built.on_conflict, parsed.on_conflict);
+        assert_eq!(built.dry_run, parsed.dry_run);
+        assert_eq!(built.skip_hidden, parsed.skip_hidden);
+        assert_eq!(built.follow_links, parsed.follow_links);
+        assert_eq!(built.contents, parsed.contents);
+        assert_eq!(built.flatten, parsed.flatten);
+        assert_eq!(built.verify, parsed.verify);
+        assert_eq!(built.fail_fast, parsed.fail_fast);
+        assert_eq!(built.keep_empty_dirs, parsed.keep_empty_dirs);
+        assert_eq!(built.no_fast_path, parsed.no_fast_path);
+        assert_eq!(built.group_by, parsed.group_by);
+        assert_eq!(built.workers, parsed.workers);
+        assert!(!built.has_filters());
+    }
+
+    #[test]
     fn trailing_path_is_the_destination() {
         let cli = Cli::try_parse_from(["ofm", "move", "a", "b", "dest"]).unwrap();
         let Some(Command::Move(args)) = cli.command else {
@@ -389,6 +422,13 @@ mod tests {
             let cli = Cli::try_parse_from(["ofm", alias, "a", "b"]).unwrap();
             assert!(matches!(cli.command, Some(Command::Move(_))));
         }
+        for alias in ["downloads", "ed", "empty-downloads"] {
+            let cli = Cli::try_parse_from(["ofm", alias]).unwrap();
+            assert!(
+                matches!(cli.command, Some(Command::CleanDownloads(_))),
+                "`{alias}` should clean the Downloads folder"
+            );
+        }
         for alias in ["recycle", "er"] {
             let cli = Cli::try_parse_from(["ofm", alias]).unwrap();
             assert!(
@@ -400,10 +440,6 @@ mod tests {
         // successful parse; what matters is that it is still the trash command.
         let cli = Cli::try_parse_from(["ofm", "rm", "a"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Trash(_))));
-        assert!(matches!(
-            Cli::try_parse_from(["ofm", "ed"]).unwrap().command,
-            Some(Command::CleanDownloads(_))
-        ));
     }
 
     #[test]

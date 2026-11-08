@@ -7,15 +7,20 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 
-use crate::cli::{CleanDownloadsArgs, EmptyRecycleArgs, TrashArgs};
+use crate::cli::{CleanDownloadsArgs, EmptyRecycleArgs, TransferArgs, TrashArgs};
+use crate::engine::exec::{self, ExecOptions};
 use crate::engine::filters::Filter;
+use crate::engine::plan::{self, Mode, PlanRequest};
 use crate::log::Logger;
 use crate::platform;
 use crate::report::{Failure, Summary};
+use crate::ui::progress::Progress;
 use crate::ui::Ui;
 use crate::util;
 
@@ -66,7 +71,8 @@ pub fn trash(args: &TrashArgs, ui: &Ui, logger: &Logger) -> Result<Summary> {
         "Send {} to the Recycle Bin?",
         count(targets.len(), "item", "items")
     ))? {
-        ui.say("Left alone.");
+        ui.say("Nothing was recycled; the files are where you left them.");
+        ui.say(ui.dim("Re-run with --yes to skip this question."));
         return Ok(summary);
     }
 
@@ -160,7 +166,12 @@ pub fn empty_recycle(args: &EmptyRecycleArgs, ui: &Ui, logger: &Logger) -> Resul
 ///
 /// Unlike the tool this replaces, the default is to recycle rather than
 /// permanently delete, and nothing happens without a confirmation.
-pub fn clean_downloads(args: &CleanDownloadsArgs, ui: &Ui, logger: &Logger) -> Result<Summary> {
+pub fn clean_downloads(
+    args: &CleanDownloadsArgs,
+    ui: &Ui,
+    logger: &Logger,
+    cancelled: Arc<AtomicBool>,
+) -> Result<Summary> {
     let folder = match &args.dir {
         Some(dir) => util::absolutize(dir)?,
         None => platform::downloads_dir()?,
@@ -282,45 +293,87 @@ pub fn clean_downloads(args: &CleanDownloadsArgs, ui: &Ui, logger: &Logger) -> R
         Fate::Move => format!("Move {}?", count(victims.len(), "entry", "entries")),
     };
     if !ui.confirm(&question)? {
-        ui.say("Left alone.");
+        ui.say(format!(
+            "Nothing was changed; {} is untouched.",
+            folder.display()
+        ));
+        ui.say(ui.dim("Re-run with --yes to skip this question."));
         return Ok(summary);
     }
 
     let started = Instant::now();
     let paths: Vec<PathBuf> = victims.iter().map(|(p, _, _)| p.clone()).collect();
 
+    // `total` is what we *hoped* to shift. Entries can fail individually, so
+    // what gets reported is what actually moved.
+    let mut done = 0u64;
+    let mut done_bytes = 0u64;
+
     if let Some(destination) = &args.to {
+        // Quarantining to another drive is the normal case, and a bare rename
+        // cannot cross volumes, so hand the work to the transfer engine, which
+        // already streams, parallelises and resolves name clashes.
         let destination = util::absolutize(destination)?;
-        fs::create_dir_all(&destination)
-            .with_context(|| format!("cannot create `{}`", destination.display()))?;
-        let mut moved = 0u64;
-        for path in &paths {
-            let target = destination.join(path.file_name().unwrap_or_default());
-            match fs::rename(path, &target) {
-                Ok(()) => moved += 1,
-                Err(error) => summary.failures.push(Failure {
-                    path: path.clone(),
-                    destination: Some(target),
-                    message: error.to_string(),
-                }),
+        let transfer = TransferArgs {
+            paths: paths.clone(),
+            to: Some(destination.clone()),
+            ..Default::default()
+        };
+        let moved = plan::build(PlanRequest {
+            sources: &paths,
+            destination: &destination,
+            args: &transfer,
+            mode: Mode::Move,
+        })?;
+        let options = ExecOptions {
+            workers: None,
+            verify: false,
+            fail_fast: false,
+            keep_empty_dirs: false,
+            verbose: ui.verbose,
+        };
+        let cross_volume = moved
+            .jobs
+            .iter()
+            .any(|job| !util::same_volume(&job.source, &job.destination));
+        let progress = Progress::for_transfer(
+            ui.progress,
+            moved.jobs.len() as u64,
+            moved.total_bytes(),
+            cross_volume,
+            "Moving...",
+        );
+        let outcome = exec::run(&moved, &options, &progress, cancelled)?;
+        progress.finish();
+        summary.failures.extend(outcome.failures);
+
+        // The engine counts bytes *streamed*, which is zero for a same-volume
+        // rename. What the user wants to know is how much left the folder, so
+        // size the entries that are actually gone.
+        for (path, size, _) in &victims {
+            if !path.exists() {
+                done += 1;
+                done_bytes += size;
             }
         }
-        summary.files = moved;
         ui.say(ui.green(&format!(
-            "Moved {} into {}.",
-            count(moved as usize, "entry", "entries"),
+            "Moved {} ({}) into {}.",
+            count(done as usize, "entry", "entries"),
+            util::format_bytes(done_bytes),
             destination.display()
         )));
     } else if args.permanent {
-        let mut removed = 0u64;
-        for (path, _, is_dir) in &victims {
+        for (path, size, is_dir) in &victims {
             let result = if *is_dir {
                 fs::remove_dir_all(path)
             } else {
                 fs::remove_file(path)
             };
             match result {
-                Ok(()) => removed += 1,
+                Ok(()) => {
+                    done += 1;
+                    done_bytes += size;
+                }
                 Err(error) => summary.failures.push(Failure {
                     path: path.clone(),
                     destination: None,
@@ -328,20 +381,26 @@ pub fn clean_downloads(args: &CleanDownloadsArgs, ui: &Ui, logger: &Logger) -> R
                 }),
             }
         }
-        summary.files = removed;
         ui.say(ui.green(&format!(
             "Permanently deleted {} and reclaimed {}.",
-            count(removed as usize, "entry", "entries"),
-            util::format_bytes(total)
+            count(done as usize, "entry", "entries"),
+            util::format_bytes(done_bytes)
         )));
     } else {
+        // The shell takes the whole batch or none of it.
         platform::send_to_recycle_bin(&paths)?;
-        summary.files = paths.len() as u64;
+        done = paths.len() as u64;
+        done_bytes = total;
         ui.say(ui.green(&format!(
-            "Sent {} to the Recycle Bin. Restore from Explorer if you need them back.",
-            count(paths.len(), "entry", "entries")
+            "Sent {} ({}) to the Recycle Bin. Restore from Explorer if you need them back.",
+            count(paths.len(), "entry", "entries"),
+            util::format_bytes(total)
         )));
     }
+
+    summary.files = done;
+    summary.bytes = done_bytes;
+    summary.bytes_human = util::format_bytes(done_bytes);
 
     summary.failed = summary.failures.len() as u64;
     summary.elapsed_ms = started.elapsed().as_millis();
@@ -349,7 +408,7 @@ pub fn clean_downloads(args: &CleanDownloadsArgs, ui: &Ui, logger: &Logger) -> R
         "cleaned {}: {} entries, {} ({})",
         folder.display(),
         summary.files,
-        util::format_bytes(total),
+        util::format_bytes(done_bytes),
         fate.verb()
     ));
 

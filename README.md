@@ -63,12 +63,12 @@ runtime dependencies — no Python, no DLLs to ship.
 | `ofm copy <SRC>... <DEST>` | Same engine, originals left alone |
 | `ofm trash <PATH>...` | Send to the Recycle Bin (undoable) |
 | `ofm recycle` | Permanently empty the Recycle Bin |
-| `ofm clean-downloads` | Clear out the Downloads folder |
+| `ofm downloads` | Clear out the Downloads folder |
 | `ofm doctor` | Environment, log location, Recycle Bin state |
 | `ofm completions <SHELL>` | Generate a completion script |
 
 Short aliases from v1 still work: `mv`, `cp`, `rm`, `er`, `ed`, `move-folder`,
-`empty-recycle`, `empty-downloads`.
+`empty-recycle`, `clean-downloads`, `empty-downloads`.
 
 ### Moving and copying
 
@@ -160,16 +160,22 @@ aliases of the same command.
 ### Clearing out Downloads
 
 ```bash
-ofm clean-downloads --dry-run              # always start here
-ofm clean-downloads --older-than 30d       # only stale things
-ofm clean-downloads --ext iso,msi,exe      # only installers
-ofm clean-downloads --to D:\quarantine     # move instead of delete
-ofm clean-downloads --permanent            # actually delete
+ofm downloads --dry-run                    # always start here
+ofm downloads --older-than 30d             # only stale things
+ofm downloads --ext iso,msi,exe            # only installers
+ofm downloads --exclude '**/tax-*'         # keep some things back
+ofm downloads --to D:\quarantine           # move instead of delete
+ofm downloads --permanent                  # actually delete
 ```
 
 The default sends entries to the **Recycle Bin**, not oblivion, and the real
 Downloads location is read from the shell, so a relocated Downloads folder
-works.
+works. `--dir` points it at some other folder if you want to clear that
+instead.
+
+`--to` goes through the same transfer engine as `ofm move`, so quarantining to
+another drive streams in parallel and keeps nested folders whole.
+`clean-downloads`, `ed` and `empty-downloads` are aliases of the same command.
 
 ## Safety
 
@@ -179,7 +185,7 @@ Moving a lot of files is exactly when you least want a surprise.
   without touching anything, and the dry run prints that same list. It is a
   preview, not an estimate.
 - **Nothing destructive happens silently.** `trash`, `recycle` and
-  `clean-downloads --permanent` ask first. With no terminal to ask (a script, a
+  `downloads --permanent` ask first. With no terminal to ask (a script, a
   pipe) they refuse rather than guess; pass `--yes` when you mean it.
 - **Deletion defaults to recoverable.** The Recycle Bin is the default; you
   have to ask for `--permanent`.
